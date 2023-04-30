@@ -8,6 +8,25 @@ import (
 	"github.com/gocolly/colly"
 )
 
+type WedstrijdType int
+
+const (
+	GeenWedstrijd WedstrijdType = iota
+	KSR
+	MSR
+	LSR
+	BSR
+	JSR
+)
+
+var wedstrijdTypeLetter = map[string]WedstrijdType{
+	"K": KSR,
+	"M": MSR,
+	"L": LSR,
+	"B": BSR,
+	"J": JSR,
+}
+
 type Run struct {
 	plaats         string
 	KSR            bool
@@ -22,11 +41,23 @@ type Run struct {
 	runDatum       time.Time
 	inschrijfOpen  time.Time
 	inschrijfSluit time.Time
+	categorieen    []Categorie
 }
 
-func GetRuns() []Run {
+type Categorie struct {
+	naam              string
+	inschrijfOpen     time.Time
+	inschrijfSluit    time.Time
+	inschrijvingen    int
+	inschrijvingenMax int
+	afstand           float32
+	prijs             float32
+	wedstrijdType     WedstrijdType
+}
+
+func GetRuns(url string) []Run {
 	c := colly.NewCollector()
-	c.Visit("https://www.uvponline.nl/uvponlineU/index.php/uvproot/wedstrijdschema/2023")
+	c.Visit(url)
 
 	var runs []Run
 
@@ -40,25 +71,20 @@ func GetRuns() []Run {
 func parseRun(e *colly.HTMLElement) Run {
 	var run Run
 
-	categorien := e.ChildText(".agendacircuit")
-	run.KSR = strings.Contains(categorien, "K")
-	run.MSR = strings.Contains(categorien, "M")
-	run.LSR = strings.Contains(categorien, "L")
-	run.BSR = strings.Contains(categorien, "B")
-	run.JSR = strings.Contains(categorien, "J")
-
 	//Als de inschijving open is, bevat deze class de link
 	run.inschrijflink = e.ChildAttr(".inschrijflink_open/a", "href")
 	if len(run.inschrijflink) > 0 {
-		c := colly.NewCollector()
-		c.Visit(run.inschrijflink)
-		c.OnHTML("div.form_description", func(e *colly.HTMLElement) {
-			r := regexp.MustCompile(`en nog mogelijk tot \d{2}-\d{2}-\d{4}`)
-			date := r.FindString(e.Text)
-			if len(date) > 0 {
-				run.inschrijfSluit, _ = time.Parse("dd-MM-yyyy", date[20:])
+		//Open inschrijflink en parse die
+		run.categorieen, run.inschrijfSluit = parseRunCategorieen(run.inschrijflink)
+	} else {
+		//Als we de inschrijflink nog niet kunnen zien, halen we in ieder geval de wedstrijdcategorieen uit deze tabel
+		categorieenText := e.ChildText(".agendacircuit")
+
+		for k, v := range wedstrijdTypeLetter {
+			if strings.Contains(categorieenText, k) {
+				run.categorieen = append(run.categorieen, Categorie{wedstrijdType: v})
 			}
-		})
+		}
 	}
 
 	//Is de inschrijving al gesloten?
@@ -91,4 +117,19 @@ func parseRun(e *colly.HTMLElement) Run {
 	}
 
 	return run
+}
+
+func parseRunCategorieen(url string) ([]Categorie, time.Time) {
+	var inschrijfSluit time.Time
+	var categorieen []Categorie
+	c := colly.NewCollector()
+	c.Visit(url)
+	c.OnHTML("div.form_description", func(e *colly.HTMLElement) {
+		r := regexp.MustCompile(`en nog mogelijk tot \d{2}-\d{2}-\d{4}`)
+		date := r.FindString(e.Text)
+		if len(date) > 0 {
+			inschrijfSluit, _ = time.Parse("dd-MM-yyyy", date[20:])
+		}
+	})
+	return categorieen, inschrijfSluit
 }
